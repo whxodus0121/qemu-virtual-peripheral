@@ -1,0 +1,7 @@
+qemu/
+buildroot/
+
+.vscode/
+.idea/
+*.swp
+*~

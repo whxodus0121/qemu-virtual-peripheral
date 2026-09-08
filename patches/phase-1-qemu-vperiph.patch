@@ -1,0 +1,214 @@
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 0871a35e11..5942852741 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -96,6 +96,8 @@
+ #include "qemu/guest-random.h"
+ #include "hw/watchdog/sbsa_gwdt.h"
+ 
++#include "hw/misc/edu-mmio.h"
++
+ static GlobalProperty arm_virt_compat_defaults[] = {
+     { TYPE_VIRTIO_IOMMU_PCI, "aw-bits", "48" },
+ };
+@@ -209,6 +211,9 @@ static const MemMapEntry base_memmap[] = {
+     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
+     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
+     [VIRT_ACPI_PCIHP] =         { 0x090c0000, ACPI_PCIHP_SIZE },
++
++	[VIRT_VPERIPH] =            { 0x090d0000, 0x00001000 },
++
+     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
+     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
+     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
+@@ -1550,6 +1555,23 @@ static void create_uart(const VirtMachineState *vms, int uart,
+     g_free(nodename);
+ }
+ 
++
++static void create_vperiph(VirtMachineState *vms)
++{
++    DeviceState *dev;
++    SysBusDevice *sbd;
++
++    dev = qdev_new(TYPE_EDU_MMIO);
++    sbd = SYS_BUS_DEVICE(dev);
++
++    sysbus_realize_and_unref(sbd, &error_fatal);
++
++    sysbus_mmio_map(sbd,
++                    0,
++                    vms->memmap[VIRT_VPERIPH].base);
++}
++
++
+ static void create_rtc(const VirtMachineState *vms)
+ {
+     char *nodename;
+@@ -3205,6 +3227,8 @@ static void machvirt_init(MachineState *machine)
+     vms->highmem_ecam &= (!firmware_loaded || aarch64);
+ 
+     create_rtc(vms);
++	
++	create_vperiph(vms);
+ 
+     create_pcie(vms);
+     create_cxl_host_reg_region(vms);
+diff --git a/hw/misc/edu-mmio.c b/hw/misc/edu-mmio.c
+new file mode 100644
+index 0000000000..ba45d548d5
+--- /dev/null
++++ b/hw/misc/edu-mmio.c
+@@ -0,0 +1,114 @@
++#include "qemu/osdep.h"
++#include "hw/core/sysbus.h"
++#include "qom/object.h"
++#include "hw/misc/edu-mmio.h"
++
++#define EDU_MMIO_SIZE 0x1000
++
++#define REG_CONTROL 0x00
++#define REG_STATUS  0x04
++#define REG_DATA    0x08
++
++OBJECT_DECLARE_SIMPLE_TYPE(EduMmioState, EDU_MMIO)
++
++struct EduMmioState {
++    SysBusDevice parent_obj;
++
++	MemoryRegion mmio;
++
++	uint32_t control;
++	uint32_t status;
++	uint32_t data;
++
++};
++
++static uint64_t edu_mmio_read(void *opaque, hwaddr addr,
++                              unsigned size)
++{
++    EduMmioState *s = opaque;
++
++    switch (addr) {
++    case REG_CONTROL:
++        return s->control;
++
++    case REG_STATUS:
++        return s->status;
++
++    case REG_DATA:
++        return s->data;
++
++    default:
++        return 0;
++    }
++}
++
++static void edu_mmio_write(void *opaque, hwaddr addr,
++                           uint64_t value, unsigned size)
++{
++    EduMmioState *s = opaque;
++
++    switch (addr) {
++    case REG_CONTROL:
++        s->control = value;
++
++        if (value == 1) {
++            s->data *= 2;
++            s->status = 1;
++        }
++        break;
++
++    case REG_STATUS:
++        /* STATUS is read-only */
++        break;
++
++    case REG_DATA:
++        s->data = value;
++        s->status = 0;
++        break;
++    }
++}
++
++static const MemoryRegionOps edu_mmio_ops = {
++    .read = edu_mmio_read,
++    .write = edu_mmio_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++
++    .valid = {
++        .min_access_size = 4,
++        .max_access_size = 4,
++    },
++};
++
++static void edu_mmio_init(Object *obj)
++{
++    EduMmioState *s = EDU_MMIO(obj);
++    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
++
++    memory_region_init_io(&s->mmio,
++                          OBJECT(s),
++                          &edu_mmio_ops,
++                          s,
++                          TYPE_EDU_MMIO,
++                          EDU_MMIO_SIZE);
++
++    sysbus_init_mmio(sbd, &s->mmio);
++}
++
++static void edu_mmio_class_init(ObjectClass *klass, const void *data){
++
++}
++
++static const TypeInfo edu_mmio_info = {
++    .name = TYPE_EDU_MMIO,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(EduMmioState),
++	.instance_init = edu_mmio_init,
++    .class_init = edu_mmio_class_init,
++};
++
++static void edu_mmio_register_types(void)
++{
++    type_register_static(&edu_mmio_info);
++}
++
++type_init(edu_mmio_register_types)
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 9790afa104..7f5779a34b 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -19,6 +19,9 @@ system_ss.add(when: 'CONFIG_ARM11SCU', if_true: files('arm11scu.c'))
+ 
+ system_ss.add(when: 'CONFIG_ARM_V7M', if_true: files('armv7m_ras.c'))
+ 
++#Custom edu
++system_ss.add(files('edu-mmio.c'))
++
+ # Mac devices
+ system_ss.add(when: 'CONFIG_MOS6522', if_true: files('mos6522.c'))
+ stub_ss.add(files('mos6522-stub.c'))
+diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
+index 22e66d1a11..22b5960556 100644
+--- a/include/hw/arm/virt.h
++++ b/include/hw/arm/virt.h
+@@ -100,6 +100,7 @@ enum {
+     VIRT_GWDT_WS0,
+     VIRT_GWDT_REFRESH,
+     VIRT_GWDT_CONTROL,
++    VIRT_VPERIPH,
+     VIRT_LOWMEMMAP_LAST,
+ };
+ 
+diff --git a/include/hw/misc/edu-mmio.h b/include/hw/misc/edu-mmio.h
+new file mode 100644
+index 0000000000..b58a148cd1
+--- /dev/null
++++ b/include/hw/misc/edu-mmio.h
+@@ -0,0 +1,6 @@
++#ifndef HW_MISC_EDU_MMIO_H
++#define HW_MISC_EDU_MMIO_H
++
++#define TYPE_EDU_MMIO "vperiph"
++
++#endif
