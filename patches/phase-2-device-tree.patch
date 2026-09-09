@@ -1,0 +1,46 @@
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 5942852741..5fbc048850 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -1558,19 +1558,37 @@ static void create_uart(const VirtMachineState *vms, int uart,
+ 
+ static void create_vperiph(VirtMachineState *vms)
+ {
++    char *nodename;
++    hwaddr base = vms->memmap[VIRT_VPERIPH].base;
++    hwaddr size = vms->memmap[VIRT_VPERIPH].size;
+     DeviceState *dev;
+     SysBusDevice *sbd;
++    MachineState *ms = MACHINE(vms);
+ 
+     dev = qdev_new(TYPE_EDU_MMIO);
+     sbd = SYS_BUS_DEVICE(dev);
+ 
+     sysbus_realize_and_unref(sbd, &error_fatal);
+ 
+-    sysbus_mmio_map(sbd,
+-                    0,
+-                    vms->memmap[VIRT_VPERIPH].base);
+-}
++    sysbus_mmio_map(sbd, 0, base);
++
++    nodename = g_strdup_printf("/vperiph@%" PRIx64, base);
++
++    qemu_fdt_add_subnode(ms->fdt, nodename);
++
++    qemu_fdt_setprop_string(ms->fdt,
++                            nodename,
++                            "compatible",
++                            "qemu,vperiph");
++
++    qemu_fdt_setprop_sized_cells(ms->fdt,
++                                 nodename,
++                                 "reg",
++                                 2, base,
++                                 2, size);
+ 
++    g_free(nodename);
++}
+ 
+ static void create_rtc(const VirtMachineState *vms)
+ {
