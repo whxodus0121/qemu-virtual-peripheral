@@ -1,0 +1,109 @@
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 5fbc048850..e9cbc43205 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -271,6 +271,9 @@ static const int a15irqmap[] = {
+     [VIRT_UART1] = 8,
+     [VIRT_ACPI_GED] = 9,
+     [VIRT_GWDT_WS0] = 10,
++	
++	[VIRT_VPERIPH] = 11,
++
+     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
+     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
+     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
+@@ -1561,7 +1564,9 @@ static void create_vperiph(VirtMachineState *vms)
+     char *nodename;
+     hwaddr base = vms->memmap[VIRT_VPERIPH].base;
+     hwaddr size = vms->memmap[VIRT_VPERIPH].size;
+-    DeviceState *dev;
++    int irq = vms->irqmap[VIRT_VPERIPH];
++
++	DeviceState *dev;
+     SysBusDevice *sbd;
+     MachineState *ms = MACHINE(vms);
+ 
+@@ -1572,6 +1577,9 @@ static void create_vperiph(VirtMachineState *vms)
+ 
+     sysbus_mmio_map(sbd, 0, base);
+ 
++	sysbus_connect_irq(sbd, 0,
++                   qdev_get_gpio_in(vms->gic, irq));
++
+     nodename = g_strdup_printf("/vperiph@%" PRIx64, base);
+ 
+     qemu_fdt_add_subnode(ms->fdt, nodename);
+@@ -1586,6 +1594,13 @@ static void create_vperiph(VirtMachineState *vms)
+                                  "reg",
+                                  2, base,
+                                  2, size);
++	
++	qemu_fdt_setprop_cells(ms->fdt,
++                           nodename,
++                           "interrupts",
++                           GIC_FDT_IRQ_TYPE_SPI,
++                           irq,
++                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+ 
+     g_free(nodename);
+ }
+diff --git a/hw/misc/edu-mmio.c b/hw/misc/edu-mmio.c
+index ba45d548d5..eed4d3727c 100644
+--- a/hw/misc/edu-mmio.c
++++ b/hw/misc/edu-mmio.c
+@@ -2,12 +2,14 @@
+ #include "hw/core/sysbus.h"
+ #include "qom/object.h"
+ #include "hw/misc/edu-mmio.h"
++#include "hw/core/irq.h"
+ 
+ #define EDU_MMIO_SIZE 0x1000
+ 
+ #define REG_CONTROL 0x00
+ #define REG_STATUS  0x04
+ #define REG_DATA    0x08
++#define REG_IRQ_ACK 0x0C
+ 
+ OBJECT_DECLARE_SIMPLE_TYPE(EduMmioState, EDU_MMIO)
+ 
+@@ -19,7 +21,8 @@ struct EduMmioState {
+ 	uint32_t control;
+ 	uint32_t status;
+ 	uint32_t data;
+-
++	
++	qemu_irq irq;
+ };
+ 
+ static uint64_t edu_mmio_read(void *opaque, hwaddr addr,
+@@ -54,6 +57,8 @@ static void edu_mmio_write(void *opaque, hwaddr addr,
+         if (value == 1) {
+             s->data *= 2;
+             s->status = 1;
++
++			qemu_set_irq(s->irq, 1);
+         }
+         break;
+ 
+@@ -65,7 +70,12 @@ static void edu_mmio_write(void *opaque, hwaddr addr,
+         s->data = value;
+         s->status = 0;
+         break;
+-    }
++    
++	case REG_IRQ_ACK:
++    	if (value == 1)
++        	qemu_set_irq(s->irq, 0);
++    	break;	
++	}
+ }
+ 
+ static const MemoryRegionOps edu_mmio_ops = {
+@@ -92,6 +102,7 @@ static void edu_mmio_init(Object *obj)
+                           EDU_MMIO_SIZE);
+ 
+     sysbus_init_mmio(sbd, &s->mmio);
++	sysbus_init_irq(sbd, &s->irq);
+ }
+ 
+ static void edu_mmio_class_init(ObjectClass *klass, const void *data){

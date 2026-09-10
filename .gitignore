@@ -16,3 +16,5 @@ buildroot/
 Module.symvers
 modules.order
 .tmp_versions/
+mnt-rootfs/
+user/vperiph_cli

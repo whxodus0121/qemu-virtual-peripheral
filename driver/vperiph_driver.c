@@ -5,10 +5,12 @@
 #include <linux/miscdevice.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
+#include <linux/interrupt.h>
 
 #define REG_CONTROL 0x00
 #define REG_STATUS  0x04
 #define REG_DATA    0x08
+#define REG_IRQ_ACK 0x0C
 
 #define VPERIPH_IOC_MAGIC 'v'
 #define VPERIPH_START _IO(VPERIPH_IOC_MAGIC, 0)
@@ -16,6 +18,7 @@
 struct vperiph_dev {
     void __iomem *base;
 	struct miscdevice miscdev;
+	int irq;
 };
 
 struct vperiph_result {
@@ -93,6 +96,16 @@ static const struct file_operations vperiph_fops = {
 	.unlocked_ioctl = vperiph_ioctl,
 };
 
+static irqreturn_t vperiph_irq_handler(int irq, void *dev_id)
+{
+    struct vperiph_dev *vdev = dev_id;
+
+    dev_info(vdev->miscdev.parent, "vperiph interrupt received\n");
+	
+	writel(1, vdev->base + REG_IRQ_ACK);
+
+    return IRQ_HANDLED;
+}
 
 static int vperiph_probe(struct platform_device *pdev)
 {
@@ -106,8 +119,21 @@ static int vperiph_probe(struct platform_device *pdev)
         return -ENOMEM;
 
     vdev->base = devm_platform_ioremap_resource(pdev, 0);
-    if (IS_ERR(vdev->base))
-        return PTR_ERR(vdev->base);
+	if (IS_ERR(vdev->base))
+		return PTR_ERR(vdev->base);
+
+	vdev->irq = platform_get_irq(pdev, 0);
+	if (vdev->irq < 0)
+    	return vdev->irq;
+
+	ret = devm_request_irq(&pdev->dev,
+						   vdev->irq,
+	                       vperiph_irq_handler,
+	                       0,
+	                       "vperiph",
+	                       vdev);
+	if (ret)
+	    return ret;
 
     platform_set_drvdata(pdev, vdev);
 
