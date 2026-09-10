@@ -1,0 +1,8 @@
+config BR2_PACKAGE_VPERIPH_CLI
+    bool "vperiph-cli"
+    depends on BR2_INSTALL_LIBSTDCPP
+    help
+      C++ user-space CLI for controlling the QEMU vperiph device.
+
+comment "vperiph-cli needs a toolchain with C++ support"
+    depends on !BR2_INSTALL_LIBSTDCPP

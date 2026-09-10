@@ -1,0 +1,8 @@
+config BR2_PACKAGE_VPERIPH_DRIVER
+    bool "vperiph-driver"
+    depends on BR2_LINUX_KERNEL
+    help
+      Linux platform driver for the QEMU vperiph device.
+
+comment "vperiph-driver needs a Linux kernel to be built"
+    depends on !BR2_LINUX_KERNEL

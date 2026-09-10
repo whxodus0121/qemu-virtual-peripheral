@@ -1,0 +1,6 @@
+menu "VPERIPH packages"
+
+source "$BR2_EXTERNAL_VPERIPH_PATH/package/vperiph-driver/Config.in"
+source "$BR2_EXTERNAL_VPERIPH_PATH/package/vperiph-cli/Config.in"
+
+endmenu

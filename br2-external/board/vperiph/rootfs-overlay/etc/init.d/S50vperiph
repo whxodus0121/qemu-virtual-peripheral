@@ -1,0 +1,25 @@
+#!/bin/sh
+
+case "$1" in
+    start)
+        echo "Loading vperiph driver..."
+        modprobe vperiph_driver
+        ;;
+
+    stop)
+        echo "Unloading vperiph driver..."
+        modprobe -r vperiph_driver
+        ;;
+
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit 0
