@@ -2,20 +2,102 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/io.h>
+#include <linux/miscdevice.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
 
 #define REG_CONTROL 0x00
 #define REG_STATUS  0x04
 #define REG_DATA    0x08
 
+#define VPERIPH_IOC_MAGIC 'v'
+#define VPERIPH_START _IO(VPERIPH_IOC_MAGIC, 0)
+
 struct vperiph_dev {
     void __iomem *base;
+	struct miscdevice miscdev;
 };
+
+struct vperiph_result {
+    u32 data;
+    u32 status;
+};
+
+static ssize_t vperiph_read(struct file *file,
+                            char __user *buf,
+                            size_t count,
+                            loff_t *ppos)
+{
+    struct miscdevice *misc = file->private_data;
+    struct vperiph_dev *vdev =
+        container_of(misc, struct vperiph_dev, miscdev);
+
+    struct vperiph_result result;
+
+    if (count < sizeof(result))
+        return -EINVAL;
+
+    result.data = readl(vdev->base + REG_DATA);
+    result.status = readl(vdev->base + REG_STATUS);
+
+    if (copy_to_user(buf, &result, sizeof(result)))
+        return -EFAULT;
+
+    return sizeof(result);
+}
+
+static ssize_t vperiph_write(struct file *file,
+                             const char __user *buf,
+                             size_t count,
+                             loff_t *ppos)
+{
+    struct miscdevice *misc = file->private_data;
+    struct vperiph_dev *vdev =
+        container_of(misc, struct vperiph_dev, miscdev);
+
+    u32 value;
+
+    if (count < sizeof(value))
+        return -EINVAL;
+
+    if (copy_from_user(&value, buf, sizeof(value)))
+        return -EFAULT;
+
+    writel(value, vdev->base + REG_DATA);
+
+    return sizeof(value);
+}
+
+static long vperiph_ioctl(struct file *file,
+                          unsigned int cmd,
+                          unsigned long arg)
+{
+    struct miscdevice *misc = file->private_data;
+    struct vperiph_dev *vdev =
+        container_of(misc, struct vperiph_dev, miscdev);
+
+    switch (cmd) {
+    case VPERIPH_START:
+        writel(1, vdev->base + REG_CONTROL);
+        return 0;
+
+    default:
+        return -ENOTTY;
+    }
+}
+
+static const struct file_operations vperiph_fops = {
+    .owner = THIS_MODULE,
+	.read = vperiph_read,
+    .write = vperiph_write,
+	.unlocked_ioctl = vperiph_ioctl,
+};
+
 
 static int vperiph_probe(struct platform_device *pdev)
 {
     struct vperiph_dev *vdev;
-    u32 data;
-    u32 status;
+	int ret;
 
     dev_info(&pdev->dev, "vperiph probe called\n");
 
@@ -29,15 +111,16 @@ static int vperiph_probe(struct platform_device *pdev)
 
     platform_set_drvdata(pdev, vdev);
 
-    writel(10, vdev->base + REG_DATA);
-    writel(1, vdev->base + REG_CONTROL);
+	vdev->miscdev.minor = MISC_DYNAMIC_MINOR;
+    vdev->miscdev.name = "vperiph";
+    vdev->miscdev.fops = &vperiph_fops;
+    vdev->miscdev.parent = &pdev->dev;
 
-    data = readl(vdev->base + REG_DATA);
-    status = readl(vdev->base + REG_STATUS);
+    ret = misc_register(&vdev->miscdev);
+    if (ret)
+        return ret;
 
-    dev_info(&pdev->dev,
-             "DATA=%u STATUS=%u\n",
-             data, status);
+    dev_info(&pdev->dev, "registered /dev/vperiph\n");
 
     return 0;
 }
